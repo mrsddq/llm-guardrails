@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm-guardrails"
+version = "0.1.0"
+description = "Layered prompt-injection and sensitive-output scanner"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1"]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.28,<1", "pytest>=8,<10", "ruff>=0.9,<1"]
+
+[project.scripts]
+guardrails = "llm_guardrails.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_guardrails"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
