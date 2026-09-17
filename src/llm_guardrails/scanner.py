@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]")
-BASE64_RE = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{80,}={0,2}(?![A-Za-z0-9+/])")
+BASE64_RE = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{16,}={0,2}(?![A-Za-z0-9+/])")
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 API_KEY_RE = re.compile(r"\b(?:sk|api|key|token)[-_][A-Za-z0-9_-]{16,}\b", re.IGNORECASE)
@@ -71,6 +71,8 @@ class GuardrailEngine:
             raise ValueError("Thresholds must satisfy 0 <= review <= block <= 1")
         self.review_threshold = review_threshold
         self.block_threshold = block_threshold
+        if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1:
+            raise ValueError("max_chars must be a positive integer")
         self.max_chars = max_chars
 
     @staticmethod
@@ -79,6 +81,11 @@ class GuardrailEngine:
 
     def scan_input(self, text: str) -> ScanResult:
         normalized = self.normalize(text)
+        if len(normalized) > self.max_chars:
+            detection = Detection("GRD007", "resource_abuse", 1.0,
+                                  f"Input exceeds the {self.max_chars}-character limit.")
+            bounded = normalized[:self.max_chars]
+            return ScanResult(False, "block", 1.0, bounded, (detection,), bounded)
         detections: list[Detection] = []
         for rule, category, weight, pattern, message in INPUT_RULES:
             for match in pattern.finditer(normalized):
@@ -87,11 +94,6 @@ class GuardrailEngine:
             detections.append(Detection(
                 "GRD006", "obfuscation", 0.2,
                 "Invisible or compatibility characters were normalized.",
-            ))
-        if len(normalized) > self.max_chars:
-            detections.append(Detection(
-                "GRD007", "resource_abuse", 0.45,
-                f"Input exceeds the {self.max_chars}-character limit.",
             ))
         for match in BASE64_RE.finditer(normalized):
             decoded = self._decode_base64(match.group())
@@ -113,7 +115,10 @@ class GuardrailEngine:
 
     def scan_output(self, text: str, canary: str | None = None, redact: bool = True) -> ScanResult:
         normalized = self.normalize(text)
+        if len(normalized) > self.max_chars:
+            raise ValueError(f"Output exceeds the {self.max_chars}-character limit")
         detections: list[Detection] = []
+        spans: list[tuple[int, int, str]] = []
         sanitized = normalized
         patterns = (
             ("GRD101", "email", 0.25, EMAIL_RE, "Output contains an email address.", "[REDACTED_EMAIL]"),
@@ -123,19 +128,34 @@ class GuardrailEngine:
         for rule, category, weight, pattern, message, replacement in patterns:
             for match in pattern.finditer(normalized):
                 detections.append(Detection(rule, category, weight, message, match.start(), match.end()))
-            if redact:
-                sanitized = pattern.sub(replacement, sanitized)
-        if canary and canary in normalized:
-            start = normalized.index(canary)
-            detections.append(Detection(
-                "GRD104", "canary_leak", 1.0,
-                "Output leaked the configured private canary.", start, start + len(canary),
-            ))
-            if redact:
-                sanitized = sanitized.replace(canary, "[REDACTED_CANARY]")
+                spans.append((match.start(), match.end(), replacement))
+        normalized_canary = self.normalize(canary) if canary else ""
+        if normalized_canary:
+            for match in re.finditer(re.escape(normalized_canary), normalized):
+                detections.append(Detection(
+                    "GRD104", "canary_leak", 1.0,
+                    "Output leaked the configured private canary.", match.start(), match.end(),
+                ))
+                spans.append((match.start(), match.end(), "[REDACTED_CANARY]"))
+        if redact:
+            # Merge overlapping spans before substitution; applying regexes sequentially
+            # can leave part of a canary visible when it contains another sensitive value.
+            merged: list[tuple[int, int, str]] = []
+            for start, end, replacement in sorted(spans):
+                if merged and start < merged[-1][1]:
+                    previous_start, previous_end, previous_replacement = merged.pop()
+                    marker = (previous_replacement if previous_replacement == replacement
+                              else "[REDACTED_SENSITIVE]")
+                    merged.append((previous_start, max(previous_end, end), marker))
+                else:
+                    merged.append((start, end, replacement))
+            for start, end, replacement in reversed(merged):
+                sanitized = sanitized[:start] + replacement + sanitized[end:]
         risk = self._risk(detections)
         action = "block" if risk >= self.block_threshold else "review" if risk >= self.review_threshold else "allow"
-        return ScanResult(action == "allow", action, risk, normalized, tuple(detections), sanitized)
+        # Redacted API/CLI serialization must not also include an unredacted copy.
+        exposed = sanitized if redact else normalized
+        return ScanResult(action == "allow", action, risk, exposed, tuple(detections), sanitized)
 
     @staticmethod
     def _risk(detections: list[Detection]) -> float:

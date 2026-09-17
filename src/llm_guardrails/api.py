@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .scanner import GuardrailEngine
@@ -9,11 +9,11 @@ engine = GuardrailEngine()
 
 
 class InputRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=100_000)
+    text: str = Field(min_length=1, max_length=20_000)
 
 
 class OutputRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=100_000)
+    text: str = Field(min_length=1, max_length=20_000)
     canary: str | None = Field(default=None, max_length=200)
     redact: bool = True
 
@@ -30,5 +30,8 @@ def scan_input(request: InputRequest) -> dict[str, object]:
 
 @app.post("/v1/scan/output")
 def scan_output(request: OutputRequest) -> dict[str, object]:
-    return engine.scan_output(request.text, request.canary, request.redact).to_dict()
+    try:
+        return engine.scan_output(request.text, request.canary, request.redact).to_dict()
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
