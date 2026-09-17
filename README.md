@@ -55,3 +55,6 @@ HTTP requests have a 20,000-character limit. Library input scans over budget fai
 Offline regression tests cover serialized leakage, overlapping/repeated canaries, normalization,
 API limits, and explicit no-redaction behavior. Risk scores are heuristic weights, not calibrated
 attack probabilities; no measured jailbreak-prevention rate is claimed.
+
+Validation errors return only field locations, error types, and messages; request values and
+validation context are omitted so rejected input does not bypass output redaction.

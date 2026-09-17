@@ -57,3 +57,17 @@ def test_api_does_not_echo_redacted_values():
 def test_api_handles_unicode_expansion_over_budget():
     response = TestClient(app).post("/v1/scan/output", json={"text": "ﬃ" * 10_000})
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("payload", [
+    {"text": "private-person@example.com" + "x" * 20_001},
+    {"text": "private-person@example.com", "redact": "secret-invalid-boolean"},
+    {"text": "private-person@example.com", "canary": "private-canary" * 30},
+])
+def test_validation_errors_do_not_echo_sensitive_request_fields(payload):
+    response = TestClient(app).post("/v1/scan/output", json=payload)
+    assert response.status_code == 422
+    assert "private-person" not in response.text
+    assert "private-canary" not in response.text
+    assert "secret-invalid" not in response.text
+    assert all("input" not in item and "ctx" not in item for item in response.json()["detail"])

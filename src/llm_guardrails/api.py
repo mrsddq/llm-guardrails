@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .scanner import GuardrailEngine
@@ -6,6 +8,13 @@ from .scanner import GuardrailEngine
 
 app = FastAPI(title="LLM Guardrails", version="0.1.0")
 engine = GuardrailEngine()
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc: RequestValidationError) -> JSONResponse:
+    # Pydantic includes original input by default; scanner errors must not echo secrets.
+    detail = [{key: item[key] for key in ("loc", "type", "msg")} for item in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 class InputRequest(BaseModel):
