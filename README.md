@@ -41,3 +41,20 @@ docker build -t llm-guardrails .
 ```
 
 MIT licensed.
+
+## Output and resource contract
+
+With `redact=true` (the default), **both** `sanitized_text` and `normalized_text` contain the
+redacted result. JSON/CLI output no longer echoes a second unredacted copy. Overlapping sensitive
+spans are merged, all canary occurrences are covered, and the canary is normalized with the same
+Unicode policy as the scanned text. Detection offsets refer to normalized text **before** redaction.
+Set `redact=false` only when an authorized consumer deliberately needs the sensitive text.
+
+HTTP requests have a 20,000-character limit. Library input scans over budget fail closed with
+`block`; over-budget output scans raise `ValueError` rather than scanning a partial secret.
+Offline regression tests cover serialized leakage, overlapping/repeated canaries, normalization,
+API limits, and explicit no-redaction behavior. Risk scores are heuristic weights, not calibrated
+attack probabilities; no measured jailbreak-prevention rate is claimed.
+
+Validation errors return only field locations, error types, and messages; request values and
+validation context are omitted so rejected input does not bypass output redaction.
